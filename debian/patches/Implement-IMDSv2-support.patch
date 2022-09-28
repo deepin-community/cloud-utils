@@ -1,0 +1,70 @@
+From: Noah Meyerhans <nmeyerha@amzn.com>
+Date: Mon, 6 Apr 2020 15:54:40 -0700
+Subject: [PATCH] Implement IMDSv2 support
+Bug-Debian: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=952563
+Forwarded: https://bugs.launchpad.net/cloud-utils/+bug/1870244
+
+---
+ bin/ec2metadata | 32 +++++++++++++++++++++++++++++++-
+ 1 file changed, 31 insertions(+), 1 deletion(-)
+
+Index: cloud-utils/bin/ec2metadata
+===================================================================
+--- cloud-utils.orig/bin/ec2metadata
++++ cloud-utils/bin/ec2metadata
+@@ -38,6 +38,10 @@ instdata_host = "169.254.169.254"
+ instdata_ver = "2009-04-04"
+ instdata_url = "http://%s/%s" % (instdata_host, instdata_ver)
+ 
++token_path = "latest/api/token"
++token_ttl_seconds = 60
++token_request_timeout_seconds = 5
++
+ __doc__ = """
+ Query and display EC2 metadata.
+ 
+@@ -117,6 +121,7 @@ class EC2Metadata:
+         if not self._test_connectivity(addr, port):
+             raise Error("could not establish connection to: %s:%s" %
+                         (addr, port))
++        self._get_api_token()
+ 
+     @staticmethod
+     def _test_connectivity(addr, port):
+@@ -131,10 +136,35 @@ class EC2Metadata:
+ 
+         return False
+ 
++    def _get_api_token(self, ttl=token_ttl_seconds,
++                       timeout=token_request_timeout_seconds):
++        """Return an (possibly dummy) API token"""
++
++        token_req_method = 'PUT'
++        headers = {
++            'X-aws-ec2-metadata-token-ttl-seconds': ttl
++        }
++        url = "http://{}/{}".format(instdata_host, token_path)
++        req = urllib_request.Request(url, headers=headers,
++                                     method=token_req_method)
++        ctx = urllib_request.urlopen(req, timeout=timeout)
++        if ctx.getcode() == 404:
++            # we don't appear to be running on ec2
++            self.api_token = None
++        elif ctx.getcode() == 200:
++            self.api_token = ctx.read()
++            return
++        raise Error("Could not retrieve API token: Error={}", (ctx.getcode()))
++
+     def _get(self, uri, decode=True):
+         url = "%s/%s" % (self.burl, uri)
++        headers = {}
++        if self.api_token:
++            headers['X-aws-ec2-metadata-token'] = self.api_token
++
+         try:
+-            resp = urllib_request.urlopen(urllib_request.Request(url))
++            resp = urllib_request.urlopen(
++                urllib_request.Request(url, headers=headers))
+             value = resp.read()
+             if decode:
+                 value = value.decode()
